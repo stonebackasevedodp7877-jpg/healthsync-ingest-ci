@@ -14,8 +14,8 @@ env:
   # Task 4c / Task 5: which module the checks run against.
   # Run 1 (vulnerable):  TARGET: ingest        DEVICE_KEY: hs-device-key-2024
   # Run 2 (fixed):       TARGET: ingest_fixed  DEVICE_KEY: k-dev-001-secret
-  TARGET: ingest
-  DEVICE_KEY: hs-device-key-2024
+  TARGET: ingest_fixed
+  DEVICE_KEY: k-dev-001-secret
   ADMIN_TOKEN: admin-token-abc   # lab test value only, not a real secret
 
 jobs:
