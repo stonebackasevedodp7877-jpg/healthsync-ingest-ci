@@ -1,0 +1,87 @@
+name: security-tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Task 4a: least privilege. The jobs only need to read the code; the
+# GITHUB_TOKEN gets no write scopes (no contents/packages/PR/issues write).
+permissions:
+  contents: read
+
+env:
+  # Task 4c / Task 5: which module the checks run against.
+  # Run 1 (vulnerable):  TARGET: ingest        DEVICE_KEY: hs-device-key-2024
+  # Run 2 (fixed):       TARGET: ingest_fixed  DEVICE_KEY: k-dev-001-secret
+  TARGET: ingest
+  DEVICE_KEY: hs-device-key-2024
+  ADMIN_TOKEN: admin-token-abc   # lab test value only, not a real secret
+
+jobs:
+  sast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # actions pinned to full commit SHAs (v4.4.0 / v5.6.0) so a moved tag cannot change the build
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Bandit (pinned version)
+        run: python -m pip install "bandit==1.9.4"
+
+      - name: Bandit SAST gate (fail on Medium severity or higher)
+        # -ll = report only Medium and High; Bandit exits 1 if any remain -> step fails
+        run: bandit -ll "${TARGET}.py" server.py
+
+  dast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Start service in background and wait for port 8080
+        id: start
+        run: |
+          INGEST_MODULE="$TARGET" python3 server.py --port 8080 > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/8080) 2>/dev/null; then
+              echo "service ($TARGET) is up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "service did not start within 30s"
+          cat server.log
+          exit 1
+
+      - name: DAST probe
+        run: python3 dast_probe.py http://127.0.0.1:8080 --device-key "$DEVICE_KEY" --admin-token "$ADMIN_TOKEN"
+
+      - name: Fuzz POST /v1/readings (seed 1, 300 inputs)
+        # run even if the probe failed, so both results are recorded; skip only if the service never started
+        if: ${{ !cancelled() && steps.start.outcome == 'success' }}
+        run: python3 fuzz.py http://127.0.0.1:8080 --device-key "$DEVICE_KEY"
+
+  regression:
+    # locks in the Task 5 fix: fails if the unhashable-"kind" 500 ever returns
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Regression tests
+        run: python3 -m unittest -v test_regression
